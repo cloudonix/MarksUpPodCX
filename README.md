@@ -17,9 +17,9 @@ issues cron events at the required interval (currently future scheduling resolut
     - Use ACL
     - Enable website hosting
     
-2. publish the Lambda layer in `src/layer` by going into that directory and running `make`.
+2. publish the Lambda layer in `src/layer` by going into that directory and running `make` (see below, in _Creating The Custom Layer_ for details).
 
-2. Log into the AWS Lambda console and create a new Node.js x86_64 function:
+3. Log into the AWS Lambda console and create a new Node.js x86_64 function:
    
     1. For the code content, put in the content of `src/lambda/index.js`
     2. Add a new layer and choose "Custom" and the layer you created in step (2).
@@ -89,3 +89,27 @@ Whenever the content of the bucket changes (and every 1AM UTC, if the EventBridg
 
 The RSS can then be published to podcast platforms.
 
+## Creating The Custom Layer
+
+The lambda function uses a custom AWS Lambda layer to load node modules that are required.
+
+A `Makefile` for GNU Make is provided to help build and publish the custom layer using standard tools that should be available on all platforms:
+  - `make` (GNU Make is expected, but it will likely work fine on other Make implementations)
+  - the `npm` command
+  - the `zip` command
+  - the AWS command line tool, that is already configured for your AWS account.
+
+If you don't have GNU Makefile installed (and you don't run Linux where getting it is as easy as running `pkcon install make`), just review the file and it
+should be clear what it does (it isn't one of those scare `Makefile`s).
+
+### Using the Makefile
+
+If you just run `make` in the `src/layer` folder - as recommended in the installation instructions above - you'd get the new layer built and installed using
+the AWS CLI default settings - i.e. the AWS default profile (named "`default`") and the AWS region `us-east-1`. These settings can be overridden using the
+environment variables (or Make arguments) `AWS_PROFILE` and `AWS_REGION`.
+
+For example:
+
+```
+make AWS_PROFILE=myprofile AWS_REGION=eu-west-2
+```
