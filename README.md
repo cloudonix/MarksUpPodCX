@@ -113,3 +113,16 @@ For example:
 ```
 make AWS_PROFILE=myprofile AWS_REGION=eu-west-2
 ```
+
+### Troubleshooting
+
+If the RSS generator fails, check the Lambda cloudwatch logs for error messages.
+
+The most common issues are:
+
+ * Make sure the memory limit is high enough. Work has been done to serialize the loading of the media files (which we need to do in order to check for media
+   duration), so that we never need more memory than what is required to load one file, but if your files are very big - you may actually run out of the default
+   128MB RAM allowed for the Lambda function. If you get memory limit issues - try to go into your Lambda function "Configuration" page and increase the limit.
+ * Make sure the time limit is high enough. Because we load S3 objects, some very big and in a serial way (see the point above), the RSS generator may take more
+   time than the default 10 seconds limit. If you get timeout errors - try to go into your Lambda function "Configuration" page and increase the time limit.
+   We found that the 10 seconds limit is insufficient almost immediately, and we recommend setting a 60 seconds timeout to start with.
