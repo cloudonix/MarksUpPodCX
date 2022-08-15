@@ -64,9 +64,11 @@ The first thing to do is to create the "top level" podcast descriptor - this con
 
 To create the descriptor you need to create a few files and place them at the root of the S3 bucket:
 
-* Markdown file with a description and title:
-  * The first level headline (starting with a single `#`) will be used as the podcast's title. All other content will be rendered as the podcast description.
-* Image files to be used as the podcast images (thumbnails). These must be in PNG format and will be listed in name order. It is recommended to name all the files identically with a suffix specifying the dimensions of the file. For example `my-podcast-150.png`.
+- Markdown file with a description and title:
+  - The first level headline (starting with a single `#`) will be used as the podcast's title.
+  - If the last line starts with the text `Keywords:` the rest of the line will be understood as a comma-separated list of keywords to be copied to each episode's RSS "keywords" tag.
+  - All other content will be rendered as the podcast description.
+- Image files to be used as the podcast images (thumbnails). These must be in PNG format and will be listed in name order. It is recommended to name all the files identically with a suffix specifying the dimensions of the file. For example `my-podcast-150.png`.
 
 ### Create Episodes
 
