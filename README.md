@@ -83,6 +83,13 @@ In each episode folder, place the following files:
   - All other content will be rendered as the episode's description.
 - Image files to be used as the episodes images (thumbnails). These must be in PNG format and will be listed in name order. It is recommended to name all the files identically with a suffix specifying the dimensions of the file. For example `episode-1-150.png`.
 
+#### Trailer Support
+
+If you want to have a special episode that is shown before all other episodes (i.e. the least recent), you can do that by creating a special episode folder labeled "`trailer`", and put in files as normally for an episode.
+
+This is useful with some services like Spotify that allow you to select one
+of your channel items as a "trailer".
+
 ### Generate RSS
 
 Whenever the content of the bucket changes (and every 1AM UTC, if the EventBridge trigger was created), the generator will run to create a file named `rss` in the bucket top level directory - so that it can be loaded by accessing the `baseURL` configured for the generator with the suffix `/rss` - for example, if the base URL is set to `https://podcast.example.com` (and it is configured correctly), the RSS will be accessible using the URL `https://podcast.example.com/rss`.
