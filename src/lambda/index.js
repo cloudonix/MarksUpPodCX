@@ -6,7 +6,7 @@ console.log('Starting',GeneratorName,'RSS generator for', podcast_name);
 const aws = require('aws-sdk');
 const s3 = new aws.S3({ apiVersion: '2006-03-01' });
 const { v5: uuidv5 } = require('uuid');
-const mediaDuration = require('mp3-duration');
+const mediaDuration = require('get-mp3-duration');
 
 const baseURL = process.env.baseURL || '';
 const author = process.env.author || '';
@@ -46,10 +46,8 @@ async function verifyPublicRead(bucket, key) {
 			hasPublicRead = true;
 		}
 	});
-	if (hasPublicRead) {
-        console.log('ACL for', key, 'is fine');
+	if (hasPublicRead)
 		return;
-    }
 	console.log('Need to allow public-read on', key);
 	return s3.putObjectAcl({ Bucket: bucket, Key: key, ACL: 'public-read' }).promise();
 }
@@ -89,7 +87,6 @@ class PodItem {
 		if (rest[rest.length-1].toLowerCase().startsWith("keywords:"))
 			this.keywords = rest.pop().replace(/^keywords:/i,'').trim().split(/\s*,\s*/);
         this.description = rest.join("\n").trim();
-        console.log("Done loading descriptor from", path);
     }
     
     async addFile(path) {
@@ -123,17 +120,16 @@ class Episode extends PodItem {
     id = '';
 	mediaSize = 0;
 	duration = 0;
-	ready = false;
 	canPublish = new Date(0);
 	readingMetadata = false;
 	
     constructor(bucket, id) {
         super();
         this.bucket = bucket;
-        this.id = id;
+        this.id = this.title = id;
         this.keyPrefix = `${id}/`;
 		this.canPublish = new Date(id);
-        if (isNaN(this.canPublish.getTime)) // is trailer
+        if (isNaN(this.canPublish.getTime())) // is trailer
             this.canPublish = new Date(0);
 	}
 	
@@ -147,27 +143,20 @@ class Episode extends PodItem {
 		this.keywords = keywords.concat(this.keywords);
 	}
     
-    async loadMediaMetadata(path) {
-		console.log('Loading media', path);
-		let s3obj = await s3.getObject({ Bucket: this.bucket, Key: this.keyPrefix + path }).promise();
-		console.log('Loaded media object', path, s3obj);
+	async updateMetadata() {
+		if (!this.media || this.readingMetadata) // no need to update media metadata
+			return;
+		this.readingMetadata = true;
+		let s3obj = await s3.getObject({ Bucket: this.bucket, Key: this.keyPrefix + this.media }).promise();
+		console.log('Loaded media object', this.media, s3obj);
 		this.mediaSize = s3obj.ContentLength;
-		this.duration = parseInt(await mediaDuration(s3obj.Body), 10);
-    	console.log("Media duration for", path, 'is', this.duration, 's');
+		this.duration = parseInt(mediaDuration(s3obj.Body)/1000, 10);
+    	console.log("Media duration for", this.media, 'is', this.duration, 's');
 	}
-	
-    async addFile(path) {
-    	console.log("Adding episode", this.id, "file", path);
-		let oldMedia = this.media;
-		await super.addFile(path);
-		if (this.media && !this.readingMetadata) { // need to update media metadata
-			this.readingMetadata = true;
-			await this.loadMediaMetadata(this.media);
-		}
-		this.ready = this.media && this.title && this.description &&
-				(Object.keys(this.images).length > 0) &&
+
+	get ready() {
+		return this.media && this.title && this.duration &&
 				((new Date()).getTime() > this.canPublish.getTime());
-        console.log('Done adding episode file', path);
 	}
 
 	toRSS(baseurl) {
@@ -175,9 +164,6 @@ class Episode extends PodItem {
 			return '';
 		let url = baseurl + '/' + this.keyPrefix;
 		let uuid = uuidv5(url, uuidv5.URL);
-		let largestImageSize = Object.keys(this.images).sort((a,b) => b-a)[0];
-		let largestImage = `${url}${encodeURIComponent(this.images[largestImageSize])}`;
-		let imagesrcset = Object.keys(this.images).map(size => `${url}${encodeURIComponent(this.images[size])} ${size}w`).join(", ");
 		return `
 	<item>
 		<title>${this.title}</title>
@@ -189,20 +175,29 @@ class Episode extends PodItem {
 		<itunes:summary><![CDATA[${this.description}]]></itunes:summary>
 		<itunes:author>${author}</itunes:author>
 		<author>${author}</author>
-		<itunes:image href="${largestImage}"/>
 		<itunes:explicit>no</itunes:explicit>
 		<itunes:keywords>${this.keywords}</itunes:keywords>
-		<enclosure url="${url}${this.media}" type="audio/mpeg" length="${this.mediaSize}"/>` +
+		<enclosure url="${url}${this.media}" type="audio/mpeg" length="${this.mediaSize}"/>
+		<itunes:duration>${this.duration}</itunes:duration>` +
+
 		/*
 		 *	<podcast:person group="cast" role="host" img="https://feeds.podcastindex.org/adam_avatar.jpg" href="http://curry.com">Adam Curry</podcast:person>
 		 *	<podcast:person href="http://dave.sobr.org" img="https://feeds.podcastindex.org/dave_avatar.jpg" group="cast" role="host">Dave Jones</podcast:person>
 		 *	<podcast:socialInteract protocol="activitypub" uri="https://thread.land/podcast/7GoP6LC/95" accountId="@dave" accountUrl="https://podcastindex.social/users/dave"/>
 		 */
-		`
-		<podcast:images srcset="${imagesrcset}"/>
-		<itunes:duration>${this.duration}</itunes:duration>
-	</item>
-		`.trim();
+		`${this.rssImages(url)}
+	</item>`;
+	}
+
+	rssImages(url) {
+		if (Object.keys(this.images).length < 1)
+			return '';
+		let largestImageSize = Object.keys(this.images).sort((a,b) => b-a)[0];
+		let largestImage = `${url}${encodeURIComponent(this.images[largestImageSize])}`;
+		let imagesrcset = Object.keys(this.images).map(size => `${url}${encodeURIComponent(this.images[size])} ${size}w`).join(", ");
+		return `
+		<itunes:image href="${largestImage}"/>
+		<podcast:images srcset="${imagesrcset}"/>`;
 	}
 }
 
@@ -223,7 +218,6 @@ class Podcast extends PodItem {
         this.bucket = bucket;
         let files = await listBucket(bucket);
         let results = [];
-        console.log("Processing files", files);
         for (let file of files) {
             let prefix, path;
             [prefix, ...path] = file.split('/');
@@ -232,22 +226,22 @@ class Podcast extends PodItem {
                     results.push(this.addEpisodeFile(prefix, path.join('/')));
             } else
                 results.push(this.addFile(prefix));
-            console.log('Done with', file);
         }
-        console.log("About to process results", results);
         await Promise.all(results);
+		for (let e of this.episodes)
+			await e.updateMetadata();
+		if (this.trailer)
+			await this.trailer.updateMetadata();
         console.log("Finished processing all files");
     }
     
     async loadMarkdown(path) {
 		await super.loadMarkdown(path);
 		if (this.keywords.length == 0) {
-            console.log("No podcast keywords");
 			return;
         }
 		for (let e of this.episodes)
 			e.addKeywords(this.keywords);
-        console.log("Finished adding podcast keywords");
 	}
     
     async addEpisodeFile(id, path) {
@@ -314,10 +308,18 @@ class Podcast extends PodItem {
 	<podcast:guid>${uuid}</podcast:guid>
 	<podcast:medium>podcast</podcast:medium>
 	<podcast:images srcset="${imagesrcset}"/>
-		` + this.episodes.map(e => e.toRSS(baseurl)).join("\n") + `
+		${this.episodesToRSS(baseurl)}
 	</channel>
 </rss>
 		`).trim();
+	}
+
+	episodesToRSS(baseurl) {
+		let rss = '';
+		if (this.trailer)
+			rss += this.trailer.toRSS(baseurl) + "\n";
+		rss += this.episodes.map(e => e.toRSS(baseurl)).join("\n");
+		return rss;
 	}
 
     static async load(bucket) {
