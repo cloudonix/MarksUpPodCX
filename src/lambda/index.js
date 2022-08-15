@@ -144,12 +144,14 @@ class Episode extends PodItem {
     
     async loadMediaMetadata(path) {
 		let s3obj = await s3.getObject({ Bucket: this.bucket, Key: this.keyPrefix + path }).promise();
-		console.log('Loaded S3 object', path, s3obj);
+		console.log('Loaded S3 object to read metadata', path, s3obj);
 		this.mediaSize = s3obj.ContentLength;
 		this.duration = parseInt(await mediaDuration(s3obj.Body), 10);
+    	console.log("Media duration", this.duration);
 	}
 	
     async addFile(path) {
+    	console.log("Adding episode", this.id, "file", path);
 		let oldMedia = this.media;
 		await super.addFile(path);
 		if (oldMedia != this.media) // need to update media metadata
@@ -210,15 +212,17 @@ class Podcast extends PodItem {
     async loadFromBucket(bucket) {
         this.bucket = bucket;
         let files = await listBucket(bucket);
+        let results = [];
         for (let file of files) {
             let prefix, path;
             [prefix, ...path] = file.split('/');
             if (path.length) {
                 if (path[0].length) // otherwise is just the episode directory node, which is just an S3 console artifact and shouldn't exist
-                    await this.addEpisodeFile(prefix, path.join('/'));
+                    results.push(this.addEpisodeFile(prefix, path.join('/')));
             } else
-                await this.addFile(prefix);
+                results.push(this.addFile(prefix));
         }
+        await Promise.all(results);
     }
     
     async loadMarkdown(path) {
