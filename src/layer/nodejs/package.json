@@ -1,0 +1,17 @@
+{
+    "name": "marksuppodcx-deps",
+    "version": "1.0.0",
+    "description": "Layer dependencies for MarksUpPodCX",
+    "main": "index.js",
+    "scripts": {
+      "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "keywords": [],
+    "author": "Oded Arbel <odeda@cloudonix.io>",
+    "license": "MIT",
+    "dependencies": {
+      "mp3-duration": "^1.1.0",
+      "uuid": "^8.3.2"
+    }
+  }
+  
