@@ -6,7 +6,7 @@ console.log('Starting',GeneratorName,'RSS generator for', podcast_name);
 const aws = require('aws-sdk');
 const s3 = new aws.S3({ apiVersion: '2006-03-01' });
 const { v5: uuidv5 } = require('uuid');
-var mediaDuration = require('mp3-duration');
+const mediaDuration = require('mp3-duration');
 
 const baseURL = process.env.baseURL || '';
 const author = process.env.author || '';
@@ -29,7 +29,7 @@ async function listBucket(bucket, nextToken) {
 }
 
 async function storeRSS(text, bucket, key) {
-	return await s3.putObject({
+	return s3.putObject({
 		Bucket: bucket,
 		Key: key,
 		Body: text,
@@ -46,10 +46,12 @@ async function verifyPublicRead(bucket, key) {
 			hasPublicRead = true;
 		}
 	});
-	if (hasPublicRead)
+	if (hasPublicRead) {
+        console.log('ACL for', key, 'is fine');
 		return;
+    }
 	console.log('Need to allow public-read on', key);
-	await s3.putObjectAcl({ Bucket: bucket, Key: key, ACL: 'public-read' }).promise();
+	return s3.putObjectAcl({ Bucket: bucket, Key: key, ACL: 'public-read' }).promise();
 }
 
 class PodItem {
@@ -68,7 +70,7 @@ class PodItem {
 
 	async loadDescriptor(path) {
 		let s3obj = await s3.getObject({ Bucket: this.bucket, Key: this.keyPrefix + path }).promise();
-		console.log('Loaded S3 object', path, s3obj);
+		console.log('Loaded descriptor object', path, s3obj);
 		this.pubdate = new Date(s3obj.LastModified);
 		return s3obj.Body.toString().replace(/\r/g, '').trim();
 	}
@@ -87,11 +89,12 @@ class PodItem {
 		if (rest[rest.length-1].toLowerCase().startsWith("keywords:"))
 			this.keywords = rest.pop().replace(/^keywords:/i,'').trim().split(/\s*,\s*/);
         this.description = rest.join("\n").trim();
+        console.log("Done loading descriptor from", path);
     }
     
     async addFile(path) {
         if (path.endsWith('.md'))
-            return await this.loadMarkdown(path);
+            return this.loadMarkdown(path);
         else if (path.endsWith('.png'))
             this.addImage(path);
         else if (path.endsWith('.mp3'))
@@ -102,8 +105,7 @@ class PodItem {
 			return;
 		}
 		// make sure that published media and images are accessible
-		await verifyPublicRead(this.bucket, this.keyPrefix + path);
-        return;
+		return verifyPublicRead(this.bucket, this.keyPrefix + path);
     }
     
     addImage(path) {
@@ -123,6 +125,7 @@ class Episode extends PodItem {
 	duration = 0;
 	ready = false;
 	canPublish = new Date(0);
+	readingMetadata = false;
 	
     constructor(bucket, id) {
         super();
@@ -130,6 +133,8 @@ class Episode extends PodItem {
         this.id = id;
         this.keyPrefix = `${id}/`;
 		this.canPublish = new Date(id);
+        if (isNaN(this.canPublish.getTime)) // is trailer
+            this.canPublish = new Date(0);
 	}
 	
     publishDate() {
@@ -143,22 +148,26 @@ class Episode extends PodItem {
 	}
     
     async loadMediaMetadata(path) {
+		console.log('Loading media', path);
 		let s3obj = await s3.getObject({ Bucket: this.bucket, Key: this.keyPrefix + path }).promise();
-		console.log('Loaded S3 object to read metadata', path, s3obj);
+		console.log('Loaded media object', path, s3obj);
 		this.mediaSize = s3obj.ContentLength;
 		this.duration = parseInt(await mediaDuration(s3obj.Body), 10);
-    	console.log("Media duration", this.duration);
+    	console.log("Media duration for", path, 'is', this.duration, 's');
 	}
 	
     async addFile(path) {
     	console.log("Adding episode", this.id, "file", path);
 		let oldMedia = this.media;
 		await super.addFile(path);
-		if (oldMedia != this.media) // need to update media metadata
+		if (this.media && !this.readingMetadata) { // need to update media metadata
+			this.readingMetadata = true;
 			await this.loadMediaMetadata(this.media);
+		}
 		this.ready = this.media && this.title && this.description &&
 				(Object.keys(this.images).length > 0) &&
 				((new Date()).getTime() > this.canPublish.getTime());
+        console.log('Done adding episode file', path);
 	}
 
 	toRSS(baseurl) {
@@ -199,6 +208,7 @@ class Episode extends PodItem {
 
 class Podcast extends PodItem {
     episodes = [];
+    trailer = null;
 	
 	publishDate() {
 		let targetDate = this.pubdate;
@@ -213,6 +223,7 @@ class Podcast extends PodItem {
         this.bucket = bucket;
         let files = await listBucket(bucket);
         let results = [];
+        console.log("Processing files", files);
         for (let file of files) {
             let prefix, path;
             [prefix, ...path] = file.split('/');
@@ -221,28 +232,45 @@ class Podcast extends PodItem {
                     results.push(this.addEpisodeFile(prefix, path.join('/')));
             } else
                 results.push(this.addFile(prefix));
+            console.log('Done with', file);
         }
+        console.log("About to process results", results);
         await Promise.all(results);
+        console.log("Finished processing all files");
     }
     
     async loadMarkdown(path) {
 		await super.loadMarkdown(path);
-		if (this.keywords.length == 0)
+		if (this.keywords.length == 0) {
+            console.log("No podcast keywords");
 			return;
+        }
 		for (let e of this.episodes)
 			e.addKeywords(this.keywords);
+        console.log("Finished adding podcast keywords");
 	}
     
     async addEpisodeFile(id, path) {
         for (let ep of this.episodes) {
             if (ep.id == id)
-                return await ep.addFile(path);
+                return ep.addFile(path);
         }
+        if (id == 'trailer') {
+            if (!this.trailer)
+                this.trailer = this.createEpisode('trailer');
+            return this.trailer.addFile(path);
+        } else {
+            let ep = this.createEpisode(id);
+            this.episodes.push(ep);
+            return ep.addFile(path);
+        }
+    }
+
+    createEpisode(id) {
         let ep = new Episode(this.bucket, id);
 		ep.addKeywords(this.keywords);
-        this.episodes[this.episodes.length] = ep;
-        console.log("Creating new episode", ep, this.episodes);
-        return await ep.addFile(path);
+        console.log("Created new", ep);
+        return ep;
     }
     
     toRSS(baseurl) {
