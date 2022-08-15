@@ -4,8 +4,14 @@ AWS_PROFILE ?= default
 
 all: publish
 
-$(LAYER_NAME).zip: nodejs
-	rm -rf nodejs/node_modules/mp3-duration/tests
+clean:
+	rm $(LAYER_NAME).zip
+	rm -rf nodejs/node_modules
+
+nodejs/node_modules:
+	(cd nodejs; npm install)
+
+$(LAYER_NAME).zip: nodejs nodejs/node_modules
 	zip -r9 $(LAYER_NAME).zip nodejs
 
 .published: $(LAYER_NAME).zip
@@ -14,4 +20,4 @@ $(LAYER_NAME).zip: nodejs
 
 publish: .published
 
-.PHONY: all publish
+.PHONY: all publish clean
