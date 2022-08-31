@@ -13,6 +13,7 @@ const author = process.env.author || '';
 const owner = process.env.owner || '';
 const owner_email = process.env.owner_email || '';
 const categories = (process.env.categories || '').split(/\s*,\s*/);
+const feed_filename = process.env.filename || 'rss';
 
 Date.prototype.toRFC822 = function() { return this.toUTCString().replace('GMT', '+0000'); };
 
@@ -46,8 +47,10 @@ async function verifyPublicRead(bucket, key) {
 			hasPublicRead = true;
 		}
 	});
-	if (hasPublicRead)
+	if (hasPublicRead) {
+        console.log('ACL for', key, 'is fine');
 		return;
+    }
 	console.log('Need to allow public-read on', key);
 	return s3.putObjectAcl({ Bucket: bucket, Key: key, ACL: 'public-read' }).promise();
 }
@@ -87,6 +90,7 @@ class PodItem {
 		if (rest[rest.length-1].toLowerCase().startsWith("keywords:"))
 			this.keywords = rest.pop().replace(/^keywords:/i,'').trim().split(/\s*,\s*/);
         this.description = rest.join("\n").trim();
+        console.log("Done loading descriptor from", path);
     }
     
     async addFile(path) {
@@ -96,7 +100,7 @@ class PodItem {
             this.addImage(path);
         else if (path.endsWith('.mp3'))
             this.media = path;
-        else if (path == 'favicon.ico' || path == 'rss') {} // ignore expected files that are not to be processed
+        else if (path == 'favicon.ico' || path == feed_filename) {} // ignore expected files that are not to be processed
         else {
             console.log('Unrecognized extension when loading item file', path);
 			return;
@@ -143,10 +147,17 @@ class Episode extends PodItem {
 		this.keywords = keywords.concat(this.keywords);
 	}
     
+    async addFile(path) {
+    	console.log("Adding episode", this.id, "file", path);
+		await super.addFile(path);
+        console.log('Done adding episode file', path);
+	}
+
 	async updateMetadata() {
 		if (!this.media || this.readingMetadata) // no need to update media metadata
 			return;
 		this.readingMetadata = true;
+		console.log('Loading media', this.media);
 		let s3obj = await s3.getObject({ Bucket: this.bucket, Key: this.keyPrefix + this.media }).promise();
 		console.log('Loaded media object', this.media, s3obj);
 		this.mediaSize = s3obj.ContentLength;
@@ -174,7 +185,7 @@ class Episode extends PodItem {
 		<itunes:subtitle>${this.title}</itunes:subtitle>
 		<itunes:summary><![CDATA[${this.description}]]></itunes:summary>
 		<itunes:author>${author}</itunes:author>
-		<author>${author}</author>
+		<author>${owner_email} (${author})</author>
 		<itunes:explicit>no</itunes:explicit>
 		<itunes:keywords>${this.keywords}</itunes:keywords>
 		<enclosure url="${url}${this.media}" type="audio/mpeg" length="${this.mediaSize}"/>
@@ -218,6 +229,7 @@ class Podcast extends PodItem {
         this.bucket = bucket;
         let files = await listBucket(bucket);
         let results = [];
+        console.log("Processing files", files);
         for (let file of files) {
             let prefix, path;
             [prefix, ...path] = file.split('/');
@@ -226,6 +238,7 @@ class Podcast extends PodItem {
                     results.push(this.addEpisodeFile(prefix, path.join('/')));
             } else
                 results.push(this.addFile(prefix));
+            console.log('Done with', file);
         }
         await Promise.all(results);
 		for (let e of this.episodes)
@@ -238,10 +251,12 @@ class Podcast extends PodItem {
     async loadMarkdown(path) {
 		await super.loadMarkdown(path);
 		if (this.keywords.length == 0) {
+            console.log("No podcast keywords");
 			return;
         }
 		for (let e of this.episodes)
 			e.addKeywords(this.keywords);
+        console.log("Finished adding podcast keywords");
 	}
     
     async addEpisodeFile(id, path) {
@@ -276,11 +291,14 @@ class Podcast extends PodItem {
 		return (`
 <rss
 		xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
-		xmlns:podcast="https://github.com/Podcastindex-org/podcast-namespace/blob/main/docs/1.0.md" version="2.0">
+		xmlns:atom="http://www.w3.org/2005/Atom"
+		xmlns:podcast="https://github.com/Podcastindex-org/podcast-namespace/blob/main/docs/1.0.md"
+		version="2.0">
 	<channel>
 	<title>${this.title}</title>
 	<description><![CDATA[${this.description}]]></description>
-	<link>${url}</link>
+	<link>${url}${feed_filename}</link>
+	<atom:link rel="self" href="${url}${feed_filename}" type="application/rss+xml"/>
 	<language>en</language>
 	<generator>${GeneratorName}</generator>
 	<pubDate>${this.publishDate().toRFC822()}</pubDate>
@@ -293,7 +311,7 @@ class Podcast extends PodItem {
 	</itunes:owner>
 	<image>
 		<url>${largestImage}</url>
-		<link>${url}</link>
+		<link>${url}${feed_filename}</link>
 		<title>${this.title}</title>
 		<description><![CDATA[${this.description}]]></description>
 		<width>${largestImageSize}</width>
@@ -316,8 +334,12 @@ class Podcast extends PodItem {
 
 	episodesToRSS(baseurl) {
 		let rss = '';
-		if (this.trailer)
+		if (this.trailer) {
+			if (this.trailer.canPublish.getTime() == 0) // if the trailer does not have a publish date set (which is fine)
+				this.trailer.canPublish = this.episodes.length < 1 ? new Date() : // set its date to either now (if there are no episodes yet)
+					new Date(this.episodes.map(e => e.canPublish.getTime()).sort((a,b) => a - b)[0] - (86400000 * 3)); // or 3 days before easrliest episode
 			rss += this.trailer.toRSS(baseurl) + "\n";
+		}
 		rss += this.episodes.map(e => e.toRSS(baseurl)).join("\n");
 		return rss;
 	}
@@ -339,7 +361,7 @@ exports.handler = async (event, context) => {
     	// Get the object from the event and show its content type
     	bucket = event.Records[0].s3.bucket.name;
     	let key = decodeURIComponent(event.Records[0].s3.object.key.replace(/\+/g, ' '));
-    	if (key.endsWith('rss')) {
+    	if (key.endsWith(feed_filename)) {
         	console.log("Ignoring changes to RSS feed itself...");
         	return "OK";
     	}
@@ -353,7 +375,7 @@ exports.handler = async (event, context) => {
     try {
         let podcast = await Podcast.load(bucket);
         console.log('Podcast:', podcast);
-		let storeRes = await storeRSS(podcast.toRSS(baseURL), bucket, 'rss');
+		let storeRes = await storeRSS(podcast.toRSS(baseURL), bucket, feed_filename);
 		console.log('Updated podcast RSS:', storeRes.ETag);
         return "OK";
     } catch (err) {
