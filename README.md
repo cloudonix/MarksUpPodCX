@@ -45,6 +45,7 @@ issues cron events at the required interval (currently future scheduling resolut
         * `owner`: a name to be used for the RSS "owner" entry
         * `owner_email`: a name to be used for the RSS "owner email" entry
         * `categories`: a list of comma separated "categories" according to the iTunes category list, to be used for the iTunes-specific RSS categories list.
+        * `filename` : the path to the RSS file that will be created in the S3 bucket. The lambda expects that the RSS can be accessed from the web using a URL composed of `<baseURL>/<filename>`. Default: `rss`
     
 4. Optionally (but recommended) configure Lambda to send you error notifications by email:
 
